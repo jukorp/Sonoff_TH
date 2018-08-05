@@ -1,0 +1,2 @@
+# Sonoff_TH
+Thermostat
