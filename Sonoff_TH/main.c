@@ -1,7 +1,7 @@
 /*
- * Sonoff TH
+ * Thermostat with buttons
  * 
- * v0.4
+ * v0.4.1
  * 
  * Copyright 2018 José A. Jiménez (@RavenSystem)
  *  
@@ -36,15 +36,17 @@
 
 #include <dht/dht.h>
 
-#define BUTTON_GPIO         0
-#define LED_GPIO            2//13
-#define RELAY_GPIO          12
-#define SENSOR_GPIO         14
+#define MAIN_BUTTON_GPIO        0
+#define UPTEMP_BUTTON_GPIO      4
+#define DOWNTEMP_BUTTON_GPIO    5
+#define LED_GPIO                2
+#define RELAY_GPIO              12
+#define SENSOR_GPIO             14
 
-#define DEBOUNCE_TIME       500     / portTICK_PERIOD_MS
-#define RESET_TIME          10000   / portTICK_PERIOD_MS
+#define DEBOUNCE_TIME           500     / portTICK_PERIOD_MS
+#define RESET_TIME              10000   / portTICK_PERIOD_MS
 
-#define POLL_PERIOD         10000
+#define POLL_PERIOD             10000
 
 uint32_t last_button_event_time, last_reset_event_time;
 float old_humidity_value = 0.0, old_temperature_value = 0.0;
@@ -141,41 +143,73 @@ void update_state() {
     }
 }
 
+void change_temp(bool up_temp) {
+    if (up_temp) {
+        target_temperature.value.float_value += 0.5;
+    } else {
+        target_temperature.value.float_value -= 0.5;
+    }
+
+    led_code(LED_GPIO, FUNCTION_A);
+    homekit_characteristic_notify(&target_temperature, target_temperature.value);
+    update_state();
+}
+
+void change_mode() {
+    uint8_t state = target_state.value.int_value + 1;
+    switch (state) {
+        case 1:
+            // Heat
+            led_code(LED_GPIO, FUNCTION_B);
+            break;
+
+        case 2:
+            state = 0;
+            // Cool
+            led_code(LED_GPIO, FUNCTION_C);
+            break;
+
+        default:
+            state = 0;
+            // Off
+            led_code(LED_GPIO, FUNCTION_A);
+            break;
+    }
+
+    target_state.value = HOMEKIT_UINT8(state);
+    homekit_characteristic_notify(&target_state, target_state.value);
+
+    update_state();
+}
+
 void button_intr_callback(uint8_t gpio) {
     uint32_t now = xTaskGetTickCountFromISR();
     
-    if (((now - last_button_event_time) > DEBOUNCE_TIME) && (gpio_read(BUTTON_GPIO) == 1)) {
-        if ((now - last_reset_event_time) > RESET_TIME) {
+    if (((now - last_button_event_time) > DEBOUNCE_TIME) && (gpio_read(gpio) == 1)) {
+        if (((now - last_reset_event_time) > RESET_TIME) && (gpio == MAIN_BUTTON_GPIO)) {
             xTaskCreate(reset_task, "Reset", 128, NULL, 1, NULL);
         } else {
             last_button_event_time = now;
             
-            uint8_t state = target_state.value.int_value + 1;
-            switch (state) {
-                case 1:
-                    // Heat
-                    led_code(LED_GPIO, FUNCTION_B);
+            switch(gpio) {
+                case UPTEMP_BUTTON_GPIO:
+                    if (target_temperature.value.float_value <= 37.5) {
+                        change_temp(true);
+                    }
                     break;
                     
-                case 2:
-                    state = 0;
-                    // Cool
-                    led_code(LED_GPIO, FUNCTION_C);
+                case DOWNTEMP_BUTTON_GPIO:
+                    if (target_temperature.value.float_value >= 10.5) {
+                        change_temp(false);
+                    }
                     break;
                     
                 default:
-                    state = 0;
-                    // Off
-                    led_code(LED_GPIO, FUNCTION_A);
+                    change_mode();
                     break;
             }
-            
-            target_state.value = HOMEKIT_UINT8(state);
-            homekit_characteristic_notify(&target_state, target_state.value);
-            
-            update_state();
         }
-    } else if (gpio_read(BUTTON_GPIO) == 0) {
+    } else if (gpio_read(gpio) == 0) {
         last_reset_event_time = now;
     }
 }
@@ -216,8 +250,16 @@ void thermostat_init() {
     gpio_enable(LED_GPIO, GPIO_OUTPUT);
     led_write(false);
     
-    gpio_set_pullup(BUTTON_GPIO, true, true);
-    gpio_set_interrupt(BUTTON_GPIO, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
+    gpio_set_pullup(MAIN_BUTTON_GPIO, true, true);
+    gpio_set_interrupt(MAIN_BUTTON_GPIO, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
+ 
+    gpio_enable(UPTEMP_BUTTON_GPIO, GPIO_INPUT);
+    gpio_set_pullup(UPTEMP_BUTTON_GPIO, true, true);
+    gpio_set_interrupt(UPTEMP_BUTTON_GPIO, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
+ 
+    gpio_enable(DOWNTEMP_BUTTON_GPIO, GPIO_INPUT);
+    gpio_set_pullup(DOWNTEMP_BUTTON_GPIO, true, true);
+    gpio_set_interrupt(DOWNTEMP_BUTTON_GPIO, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
     
     gpio_set_pullup(SENSOR_GPIO, false, false);
     
@@ -230,17 +272,17 @@ void thermostat_init() {
     sdk_os_timer_arm(&thermostat_timer, POLL_PERIOD, 1);
 }
 
-homekit_characteristic_t name = HOMEKIT_CHARACTERISTIC_(NAME, "Sonoff Thermostat");
-homekit_characteristic_t serial = HOMEKIT_CHARACTERISTIC_(SERIAL_NUMBER, "Sonoff N/A");
+homekit_characteristic_t name = HOMEKIT_CHARACTERISTIC_(NAME, "Thermostat");
+homekit_characteristic_t serial = HOMEKIT_CHARACTERISTIC_(SERIAL_NUMBER, "TH N/A");
 
 homekit_accessory_t *accessories[] = {
     HOMEKIT_ACCESSORY(.id=1, .category=homekit_accessory_category_thermostat, .services=(homekit_service_t*[]) {
         HOMEKIT_SERVICE(ACCESSORY_INFORMATION, .characteristics=(homekit_characteristic_t*[]) {
             &name,
-            HOMEKIT_CHARACTERISTIC(MANUFACTURER, "iTEAD"),
+            HOMEKIT_CHARACTERISTIC(MANUFACTURER, "Kristian"),
             &serial,
-            HOMEKIT_CHARACTERISTIC(MODEL, "Sonoff TH"),
-            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.4"),
+            HOMEKIT_CHARACTERISTIC(MODEL, "Thermostat"),
+            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.4.1"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
             NULL
         }),
@@ -269,7 +311,7 @@ void create_accessory_name() {
     sdk_wifi_get_macaddr(STATION_IF, macaddr);
     
     char *name_value = malloc(14);
-    snprintf(name_value, 14, "Sonoff %02X%02X%02X", macaddr[3], macaddr[4], macaddr[5]);
+    snprintf(name_value, 14, "TH %02X%02X%02X", macaddr[3], macaddr[4], macaddr[5]);
     
     name.value = HOMEKIT_STRING(name_value);
     serial.value = HOMEKIT_STRING(name_value);
@@ -286,7 +328,7 @@ void on_wifi_ready() {
 void user_init(void) {
     uart_set_baud(0, 115200);
     
-    wifi_config_init("Sonoff", NULL, on_wifi_ready);
+    wifi_config_init("TH", NULL, on_wifi_ready);
     
     thermostat_init();
 }
