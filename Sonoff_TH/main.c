@@ -35,6 +35,7 @@
 #include <led_codes.h>
 
 #include <dht/dht.h>
+#include <strings.h>
 
 #define MAIN_BUTTON_GPIO        0
 #define UPTEMP_BUTTON_GPIO      4
@@ -47,6 +48,7 @@
 #define RESET_TIME              10000   / portTICK_PERIOD_MS
 
 #define POLL_PERIOD             10000
+uint8_t temp = 0;
 
 uint32_t last_button_event_time, last_reset_event_time;
 float old_humidity_value = 0.0, old_temperature_value = 0.0;
@@ -64,6 +66,7 @@ void update_state();
 
 void on_update(homekit_characteristic_t *ch, homekit_value_t value, void *context) {
     update_state();
+    printf("*%d\n", temp);
 }
 
 void on_target(homekit_characteristic_t *ch, homekit_value_t value, void *context);
@@ -141,13 +144,15 @@ void update_state() {
             
         relay_write(false);
     }
+ temp = target_temperature.value.float_value;
+
 }
 
 void change_temp(bool up_temp) {
     if (up_temp) {
-        target_temperature.value.float_value += 0.5;
+        target_temperature.value.float_value += 1;
     } else {
-        target_temperature.value.float_value -= 0.5;
+        target_temperature.value.float_value -= 1;
     }
 
     led_code(LED_GPIO, FUNCTION_A);
@@ -195,12 +200,15 @@ void button_intr_callback(uint8_t gpio) {
                 case UPTEMP_BUTTON_GPIO:
                     if (target_temperature.value.float_value <= 37.5) {
                         change_temp(true);
+                                           //     printf(">>> Sensor: temperature %i\n",22);
+
                     }
                     break;
                     
                 case DOWNTEMP_BUTTON_GPIO:
                     if (target_temperature.value.float_value >= 10.5) {
                         change_temp(false);
+
                     }
                     break;
                     
@@ -218,8 +226,12 @@ void temperature_sensor_task() {
     float humidity_value, temperature_value;
         
     if (dht_read_float_data(DHT_TYPE_DHT22, SENSOR_GPIO, &humidity_value, &temperature_value)) {
-        printf(">>> Sensor: temperature %g, humidity %g\n", temperature_value, humidity_value);
-        
+       // printf(">>> Sensor: temperature %g, humidity %g\n", temperature_value, humidity_value);
+      //  printf("@%g\n",temperature_value);
+     //   printf("$%g\n",humidity_value);
+     //   printf("*%d\n", temp);
+     printf("@%g\n$%g\n*%d\n", temperature_value, humidity_value,temp);
+     
         if (temperature_value != old_temperature_value) {
             old_temperature_value = temperature_value;
             current_temperature.value = HOMEKIT_FLOAT(temperature_value);
@@ -235,6 +247,8 @@ void temperature_sensor_task() {
         }
     } else {
         printf(">>> Sensor: ERROR\n");
+        
+        
         led_code(LED_GPIO, SENSOR_ERROR);
         
         if (current_state.value.int_value != 0) {
@@ -282,7 +296,7 @@ homekit_accessory_t *accessories[] = {
             HOMEKIT_CHARACTERISTIC(MANUFACTURER, "Kristian"),
             &serial,
             HOMEKIT_CHARACTERISTIC(MODEL, "Thermostat"),
-            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.4.1"),
+            HOMEKIT_CHARACTERISTIC(FIRMWARE_REVISION, "0.4.2"),
             HOMEKIT_CHARACTERISTIC(IDENTIFY, identify),
             NULL
         }),
